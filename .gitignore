@@ -48,5 +48,5 @@ htmlcov/
 # Data files (parquet datasets)
 revolut_credit_risk/data/datasets/
 
-# Pipeline outputs (generated files)
-revolut_credit_risk/outputs/
+# Pipeline log (large, regenerated each run)
+revolut_credit_risk/outputs/pipeline.log
