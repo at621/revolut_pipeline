@@ -16,10 +16,10 @@ def test_default_values():
     assert config.RANDOM_SEED == 42
     assert config.N_CUSTOMERS == 10_000
     assert 0 < config.DEFAULT_RATE < 1
-    assert config.DFS_DEPTH == 2
+    assert config.DFS_DEPTH == 3
     assert config.IV_THRESHOLD == 0.02
-    assert config.MIV_THRESHOLD == 0.02
-    assert config.CORRELATION_THRESHOLD == 0.6
+    assert config.MIV_THRESHOLD == 0.01
+    assert config.CORRELATION_THRESHOLD == 0.80
     assert config.TRAIN_RATIO + config.TEST_RATIO + config.OOT_RATIO == 1.0
 
 

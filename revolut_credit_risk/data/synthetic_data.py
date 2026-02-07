@@ -2,6 +2,13 @@
 
 [Assumption] The paper uses proprietary Revolut data. This entire module is
 our design to enable replication without access to real banking data.
+
+Design: each customer gets a latent risk_score based on demographics. This
+risk_score drives BOTH the transaction patterns (salary size, spending
+volatility, entertainment fraction) AND the default outcome. This ensures
+DFS-generated features (MEAN, STD, COUNT of transactions) have genuine
+predictive power for default, matching the paper's premise that
+"transactional data and user behaviour" predict credit risk [Paper §1.1].
 """
 from __future__ import annotations
 
@@ -22,6 +29,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Public data container
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class SyntheticData:
@@ -52,10 +60,18 @@ def generate_synthetic_data() -> SyntheticData:
 
     customers = _generate_customers(rng)
     accounts = _generate_accounts(rng, customers)
-    transactions = _generate_transactions(rng, accounts)
+
+    # Compute risk scores ONCE — used for both transactions and defaults
+    # [Assumption] Shared latent risk score ensures DFS features align with target
+    risk_rng = np.random.default_rng(config.RANDOM_SEED + 1)
+    risk_scores = _compute_customer_risk_scores(customers, risk_rng)
+
+    # Generate transactions that vary by each customer's risk profile
+    transactions = _generate_transactions(rng, accounts, customers, risk_scores)
+
     credit_applications = _generate_credit_applications(rng, customers)
     loan_performance = _generate_loan_performance(
-        rng, customers, accounts, transactions, credit_applications
+        rng, customers, credit_applications, risk_scores
     )
 
     elapsed = time.time() - t0
@@ -101,6 +117,47 @@ _MERCHANTS = [
 ]
 
 
+def _compute_customer_risk_scores(customers: pd.DataFrame, rng: np.random.Generator) -> np.ndarray:
+    """Compute a latent risk score for each customer from demographics.
+
+    [Assumption] This latent score drives both transaction patterns and default.
+    Higher score = riskier.  Range roughly -2 to +3.
+    """
+    n = len(customers)
+    risk = np.zeros(n)
+
+    ages = customers["age"].values
+    income_bands = customers["income_band"].values.astype(str)
+    emp_statuses = customers["employment_status"].values.astype(str)
+
+    # Age: U-shaped (very young / very old = riskier)
+    young = ages < 25
+    old = ages > 60
+    risk[young] += (25 - ages[young]) * 0.06
+    risk[old] += (ages[old] - 60) * 0.04
+
+    # Income band
+    income_map = {"Low": 0.8, "Medium": 0.0, "High": -0.5, "Very High": -0.8}
+    risk += np.array([income_map.get(ib, 0.0) for ib in income_bands])
+
+    # Employment
+    emp_map = {
+        "Employed": -0.3, "Self-Employed": 0.2,
+        "Unemployed": 1.2, "Student": 0.5, "Retired": 0.1,
+    }
+    risk += np.array([emp_map.get(es, 0.0) for es in emp_statuses])
+
+    # Tenure: newer signups are riskier
+    tenure_days = (pd.Timestamp("2025-01-01") - customers["signup_date"]).dt.days.values
+    tenure_months = np.maximum(1, tenure_days // 30)
+    risk += np.where(tenure_months < 6, 0.5, np.where(tenure_months < 12, 0.2, 0.0))
+
+    # Add persistent per-customer noise (this becomes part of the customer's "type")
+    risk += rng.normal(0, 0.3, size=n)
+
+    return risk
+
+
 def _generate_customers(rng: np.random.Generator) -> pd.DataFrame:
     n = config.N_CUSTOMERS
     # [Assumption] signup dates spanning ~3 years before observation
@@ -128,60 +185,138 @@ def _generate_customers(rng: np.random.Generator) -> pd.DataFrame:
 def _generate_accounts(
     rng: np.random.Generator, customers: pd.DataFrame
 ) -> pd.DataFrame:
-    # [Assumption] 1-3 accounts per customer
-    rows: list[dict] = []
-    aid = 1
-    for _, cust in customers.iterrows():
-        n_acc = rng.integers(1, 4)
-        for _ in range(n_acc):
-            open_offset = rng.integers(0, 180)
-            rows.append({
-                "account_id": aid,
-                "customer_id": cust["customer_id"],
-                "account_type": rng.choice(_ACCOUNT_TYPES),
-                "open_date": cust["signup_date"] + pd.Timedelta(days=int(open_offset)),
-                "currency": rng.choice(_CURRENCIES),
-            })
-            aid += 1
+    # [Assumption] 1-3 accounts per customer — vectorised
+    n = len(customers)
+    n_accounts_per = rng.integers(1, 4, size=n)
+    total = int(n_accounts_per.sum())
 
-    df = pd.DataFrame(rows)
+    cust_ids = np.repeat(customers["customer_id"].values, n_accounts_per)
+    signup_dates = np.repeat(customers["signup_date"].values, n_accounts_per)
+    open_offsets = rng.integers(0, 180, size=total)
+
+    df = pd.DataFrame({
+        "account_id": np.arange(1, total + 1),
+        "customer_id": cust_ids,
+        "account_type": rng.choice(_ACCOUNT_TYPES, size=total),
+        "open_date": signup_dates + pd.to_timedelta(open_offsets, unit="D"),
+        "currency": rng.choice(_CURRENCIES, size=total),
+    })
     df["account_type"] = pd.Categorical(df["account_type"], categories=_ACCOUNT_TYPES)
     df["currency"] = pd.Categorical(df["currency"], categories=_CURRENCIES)
-    logger.info("Generated %d accounts for %d customers", len(df), len(customers))
+    logger.info("Generated %d accounts for %d customers", len(df), n)
     return df
 
 
 def _generate_transactions(
-    rng: np.random.Generator, accounts: pd.DataFrame
+    rng: np.random.Generator, accounts: pd.DataFrame,
+    customers: pd.DataFrame, risk_scores: np.ndarray,
 ) -> pd.DataFrame:
-    # [Assumption] 20-100 transactions per account over ~24 months
-    rows: list[dict] = []
-    tid = 1
-    for _, acc in accounts.iterrows():
-        n_tx = rng.integers(20, 101)
-        for _ in range(n_tx):
-            tx_offset = rng.integers(0, 730)  # up to 24 months
-            category = rng.choice(_TX_CATEGORIES)
-            # Salary is always positive; others mostly negative (debits)
-            if category == "Salary":
-                amount = float(rng.uniform(1500, 6000))
-            elif category == "Rent":
-                amount = -float(rng.uniform(400, 2000))
-            else:
-                amount = -float(rng.exponential(50)) if rng.random() < 0.85 else float(rng.uniform(10, 500))
+    """Generate transactions whose patterns vary by customer risk profile.
 
-            rows.append({
-                "transaction_id": tid,
-                "account_id": acc["account_id"],
-                "transaction_date": acc["open_date"] + pd.Timedelta(days=int(tx_offset)),
-                "amount": round(amount, 2),
-                "category": category,
-                "merchant_name": rng.choice(_MERCHANTS),
-                "transaction_state": rng.choice(_TX_STATES, p=[0.90, 0.05, 0.05]),
-            })
-            tid += 1
+    [Assumption] Risky customers have lower salaries, higher spending volatility,
+    and more entertainment/travel spending.  This is what makes DFS features
+    predictive: e.g., MEAN(transactions.amount) will be lower for risky customers.
+    """
+    cust_risk = pd.Series(risk_scores, index=customers["customer_id"].values)
 
-    df = pd.DataFrame(rows)
+    n_acc = len(accounts)
+    n_tx_per = rng.integers(20, 101, size=n_acc)
+    total = int(n_tx_per.sum())
+
+    acc_ids = np.repeat(accounts["account_id"].values, n_tx_per)
+    acc_cust_ids = np.repeat(accounts["customer_id"].values, n_tx_per)
+    open_dates = np.repeat(accounts["open_date"].values, n_tx_per)
+    tx_offsets = rng.integers(0, 730, size=total)
+
+    # Look up each transaction's customer risk score
+    tx_risk = cust_risk.reindex(acc_cust_ids).values
+
+    # Risk-driven category distribution — vectorised
+    # Higher risk → more Entertainment/Travel, less Salary
+    # [Assumption] Category probabilities shift based on risk
+    p_salary = np.clip(0.15 - tx_risk * 0.04, 0.03, 0.20)
+    p_ent = np.clip(0.08 + tx_risk * 0.04, 0.04, 0.20)
+    p_travel = np.clip(0.06 + tx_risk * 0.03, 0.03, 0.15)
+    p_remaining = 1.0 - p_salary - p_ent - p_travel
+    p_other = p_remaining / 7.0  # split among 7 other categories
+
+    # Build (total, 10) probability matrix — columns match _TX_CATEGORIES order
+    prob_matrix = np.column_stack([
+        p_other,   # Groceries
+        p_travel,  # Travel
+        p_ent,     # Entertainment
+        p_other,   # Utilities
+        p_salary,  # Salary
+        p_other,   # Transfer
+        p_other,   # Rent
+        p_other,   # Shopping
+        p_other,   # Restaurants
+        p_other,   # Other
+    ])
+    prob_matrix = prob_matrix / prob_matrix.sum(axis=1, keepdims=True)
+
+    # Vectorised category sampling via cumulative probabilities
+    cdf = np.cumsum(prob_matrix, axis=1)
+    u = rng.random(total)[:, np.newaxis]
+    cat_indices = (u < cdf).argmax(axis=1)
+    cat_array = np.array(_TX_CATEGORIES)
+    categories = cat_array[cat_indices]
+
+    # Risk-driven amounts:
+    # Lower risk → higher salary, lower spending magnitude
+    amounts = np.empty(total)
+    is_salary = categories == "Salary"
+    is_rent = categories == "Rent"
+    is_other = ~is_salary & ~is_rent
+
+    # Salary: low-risk customers earn more
+    # [Assumption] Salary range shifts down with risk
+    salary_base = np.clip(4000 - tx_risk[is_salary] * 800, 1200, 6000)
+    salary_spread = salary_base * 0.3
+    amounts[is_salary] = np.maximum(
+        800, rng.normal(salary_base, salary_spread)
+    )
+
+    # Rent: fairly stable across risk levels
+    amounts[is_rent] = -rng.uniform(400, 2000, size=is_rent.sum())
+
+    # Other spending: riskier customers spend more erratically
+    n_other = is_other.sum()
+    other_risk = tx_risk[is_other]
+    is_debit = rng.random(n_other) < 0.85
+    # Higher risk → larger average spend
+    spend_scale = np.clip(40 + other_risk * 20, 20, 120)
+    amounts_other = np.where(
+        is_debit,
+        -rng.exponential(spend_scale),
+        rng.uniform(10, 500, size=n_other),
+    )
+    amounts[is_other] = amounts_other
+    amounts = np.round(amounts, 2)
+
+    # Transaction state: riskier customers have more declined transactions
+    # [Assumption] Declined rate increases with risk — vectorised
+    state_probs = np.column_stack([
+        np.clip(0.92 - tx_risk * 0.03, 0.80, 0.98),  # COMPLETED
+        np.full(total, 0.03),                           # PENDING
+        np.clip(0.05 + tx_risk * 0.03, 0.02, 0.17),   # DECLINED
+    ])
+    state_probs = state_probs / state_probs.sum(axis=1, keepdims=True)
+    state_cdf = np.cumsum(state_probs, axis=1)
+    u_state = rng.random(total)[:, np.newaxis]
+    state_indices = (u_state < state_cdf).argmax(axis=1)
+    state_array = np.array(_TX_STATES)
+    tx_states = state_array[state_indices]
+
+    df = pd.DataFrame({
+        "transaction_id": np.arange(1, total + 1),
+        "account_id": acc_ids,
+        "transaction_date": open_dates + pd.to_timedelta(tx_offsets, unit="D"),
+        "amount": amounts,
+        "category": categories,
+        "merchant_name": rng.choice(_MERCHANTS, size=total),
+        "transaction_state": tx_states,
+    })
     df["category"] = pd.Categorical(df["category"], categories=_TX_CATEGORIES)
     df["transaction_state"] = pd.Categorical(
         df["transaction_state"], categories=_TX_STATES
@@ -193,28 +328,24 @@ def _generate_transactions(
 def _generate_credit_applications(
     rng: np.random.Generator, customers: pd.DataFrame
 ) -> pd.DataFrame:
-    # [Assumption] ~80% of customers apply for credit
+    # [Assumption] ~80% of customers apply for credit — vectorised
     n_applicants = int(len(customers) * 0.8)
     applicant_ids = rng.choice(
         customers["customer_id"].values, size=n_applicants, replace=False
     )
-    rows: list[dict] = []
-    app_id = 1
-    for cid in applicant_ids:
-        cust = customers.loc[customers["customer_id"] == cid].iloc[0]
-        # Application comes after signup
-        app_offset = rng.integers(30, 365 * 2)
-        rows.append({
-            "application_id": app_id,
-            "customer_id": int(cid),
-            "application_date": cust["signup_date"] + pd.Timedelta(days=int(app_offset)),
-            "product_type": rng.choice(["Personal Loan", "Credit Card"]),
-            "requested_amount": round(float(rng.uniform(500, 25000)), 2),
-            "approved": True,  # we only model approved applications
-        })
-        app_id += 1
+    # Look up signup dates via merge rather than iterrows
+    cust_lookup = customers.set_index("customer_id")["signup_date"]
+    signup_dates = cust_lookup.loc[applicant_ids].values
+    app_offsets = rng.integers(30, 365 * 2, size=n_applicants)
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame({
+        "application_id": np.arange(1, n_applicants + 1),
+        "customer_id": applicant_ids,
+        "application_date": signup_dates + pd.to_timedelta(app_offsets, unit="D"),
+        "product_type": rng.choice(["Personal Loan", "Credit Card"], size=n_applicants),
+        "requested_amount": np.round(rng.uniform(500, 25000, size=n_applicants), 2),
+        "approved": True,
+    })
     logger.info("Generated %d credit applications", len(df))
     return df
 
@@ -222,88 +353,38 @@ def _generate_credit_applications(
 def _generate_loan_performance(
     rng: np.random.Generator,
     customers: pd.DataFrame,
-    accounts: pd.DataFrame,
-    transactions: pd.DataFrame,
     applications: pd.DataFrame,
+    risk_scores: np.ndarray,
 ) -> pd.DataFrame:
-    """Generate loan outcomes driven by a latent risk score.
+    """Generate loan outcomes driven by the same latent risk score.
 
-    [Assumption] The latent risk score ensures DFS features have genuine
-    (but not trivially perfect) predictive power.
+    [Assumption] Default probability is a logistic function of the customer's
+    risk score (same score that drove transaction patterns) plus noise.
+    This ensures DFS features are genuinely predictive.
     """
-    # Pre-compute per-customer behavioural features for the risk score
-    cust_features = _compute_customer_risk_features(
-        customers, accounts, transactions, applications
-    )
+    cust_risk = pd.Series(risk_scores, index=customers["customer_id"].values)
 
-    rows: list[dict] = []
-    for _, app in applications.iterrows():
-        cid = app["customer_id"]
-        feats = cust_features.get(cid, {})
+    app_cids = applications["customer_id"].values
+    n = len(applications)
 
-        # --- Latent risk score (higher = riskier) ---
-        risk = 0.0
+    # Look up each application's customer risk score
+    app_risk = cust_risk.reindex(app_cids).values
 
-        # Age: U-shaped (very young / very old = riskier)
-        age = feats.get("age", 35)
-        if age < 25:
-            risk += (25 - age) * 0.04
-        elif age > 60:
-            risk += (age - 60) * 0.03
+    # Add application-level noise (so risk isn't perfectly deterministic)
+    app_risk += rng.normal(0, 0.4, size=n)
 
-        # Income band
-        income_map = {"Low": 0.6, "Medium": 0.0, "High": -0.3, "Very High": -0.5}
-        risk += income_map.get(feats.get("income_band", "Medium"), 0.0)
+    # Convert to default probability via logistic function
+    # [Assumption] intercept tuned to achieve target default rate ~5-8%
+    p_default = 1 / (1 + np.exp(-(app_risk - 3.0)))
+    is_default = (rng.random(n) < p_default).astype(int)
+    dpd_max = np.where(is_default, rng.integers(90, 180, size=n), rng.integers(0, 30, size=n))
 
-        # Employment
-        emp_map = {
-            "Employed": -0.2, "Self-Employed": 0.1,
-            "Unemployed": 0.8, "Student": 0.3, "Retired": 0.1,
-        }
-        risk += emp_map.get(feats.get("employment_status", "Employed"), 0.0)
-
-        # Average balance (lower = riskier)
-        avg_bal = feats.get("avg_balance", 0)
-        risk -= np.clip(avg_bal / 5000, -1.0, 1.0)
-
-        # Spending volatility (higher = riskier)
-        vol = feats.get("spending_volatility", 50)
-        risk += np.clip(vol / 200, 0, 0.8)
-
-        # Salary regularity — fraction of months with salary deposit
-        salary_reg = feats.get("salary_regularity", 0.5)
-        risk -= salary_reg * 0.5
-
-        # Entertainment / gambling fraction
-        ent_frac = feats.get("entertainment_fraction", 0.1)
-        risk += ent_frac * 1.5
-
-        # Account tenure (months since signup)
-        tenure = feats.get("tenure_months", 12)
-        if tenure < 6:
-            risk += 0.4
-        elif tenure < 12:
-            risk += 0.1
-
-        # Add noise
-        risk += rng.normal(0, 0.5)
-
-        # Convert to default probability via logistic function
-        # [Assumption] intercept tuned to achieve target default rate ~5-8%
-        p_default = 1 / (1 + np.exp(-(risk - 2.5)))
-
-        is_default = bool(rng.random() < p_default)
-        dpd_max = int(rng.integers(90, 180)) if is_default else int(rng.integers(0, 30))
-
-        rows.append({
-            "application_id": app["application_id"],
-            "months_on_book": int(rng.integers(6, 25)),
-            "dpd_max": dpd_max,
-            "is_default": is_default,
-        })
-
-    df = pd.DataFrame(rows)
-    df["is_default"] = df["is_default"].astype(int)
+    df = pd.DataFrame({
+        "application_id": applications["application_id"].values,
+        "months_on_book": rng.integers(6, 25, size=n),
+        "dpd_max": dpd_max,
+        "is_default": is_default,
+    })
 
     actual_rate = df["is_default"].mean()
     logger.info(
@@ -311,70 +392,6 @@ def _generate_loan_performance(
         len(df), 100 * actual_rate,
     )
     return df
-
-
-def _compute_customer_risk_features(
-    customers: pd.DataFrame,
-    accounts: pd.DataFrame,
-    transactions: pd.DataFrame,
-    applications: pd.DataFrame,
-) -> dict[int, dict]:
-    """Pre-compute per-customer behavioural features for the latent risk score."""
-    # Index customers
-    cust_map: dict[int, dict] = {}
-    for _, c in customers.iterrows():
-        cust_map[int(c["customer_id"])] = {
-            "age": int(c["age"]),
-            "income_band": str(c["income_band"]),
-            "employment_status": str(c["employment_status"]),
-            "signup_date": c["signup_date"],
-        }
-
-    # Account-level aggregation
-    acc_by_cust = accounts.groupby("customer_id")["account_id"].apply(list).to_dict()
-
-    # Transaction-level aggregation (by account)
-    tx_grouped = transactions.groupby("account_id")
-
-    for cid, info in cust_map.items():
-        acc_ids = acc_by_cust.get(cid, [])
-        all_amounts: list[float] = []
-        salary_months: set[str] = set()
-        entertainment_total = 0.0
-        total_abs = 0.0
-
-        for aid in acc_ids:
-            if aid not in tx_grouped.groups:
-                continue
-            acc_txs = tx_grouped.get_group(aid)
-            all_amounts.extend(acc_txs["amount"].tolist())
-            # Salary regularity
-            sal_txs = acc_txs[acc_txs["category"] == "Salary"]
-            for _, stx in sal_txs.iterrows():
-                salary_months.add(stx["transaction_date"].strftime("%Y-%m"))
-            # Entertainment fraction
-            ent_txs = acc_txs[acc_txs["category"].isin(["Entertainment", "Travel"])]
-            entertainment_total += ent_txs["amount"].abs().sum()
-            total_abs += acc_txs["amount"].abs().sum()
-
-        if all_amounts:
-            info["avg_balance"] = float(np.mean(all_amounts))
-            info["spending_volatility"] = float(np.std(all_amounts))
-        else:
-            info["avg_balance"] = 0.0
-            info["spending_volatility"] = 50.0
-
-        info["salary_regularity"] = len(salary_months) / 24.0  # over ~24 months
-        info["entertainment_fraction"] = (
-            entertainment_total / total_abs if total_abs > 0 else 0.1
-        )
-        # Tenure
-        signup = info["signup_date"]
-        info["tenure_months"] = max(
-            1, (pd.Timestamp("2025-01-01") - signup).days // 30
-        )
-
-    return cust_map
 
 
 # ---------------------------------------------------------------------------

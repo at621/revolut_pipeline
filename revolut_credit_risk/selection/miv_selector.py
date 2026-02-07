@@ -226,6 +226,14 @@ def _fit_and_score(
     auc_train = roc_auc_score(y_train, pred_train)
     auc_test = roc_auc_score(y_test, pred_test)
 
+    # [Assumption] Warn if AUC < 0.5 — indicates inverted predictions
+    if auc_test < 0.5:
+        logger.warning(
+            "Test AUC=%.4f < 0.5 — model predictions may be inverted. "
+            "Check WoE signs and target encoding.",
+            auc_test,
+        )
+
     return auc_train, auc_test, model
 
 

@@ -124,18 +124,18 @@ def _plot_residual_bar(
     [Paper Fig. 9] "the observed early delinquency rate by coarse risk
     segment, with bars grouped by feature value ranges."
     """
-    # [Paper §3.1, Fig. 9] Risk grades via quintile buckets
-    risk_grades = pd.qcut(
-        model_probs, q=4,
-        labels=["Very Low", "Low", "Average", "High"],
-        duplicates="drop",
-    )
-
     if feature_name not in X_raw.columns:
         return
+    if feature_name not in binning_results.results:
+        return
 
-    feat_vals = X_raw[feature_name].values
-    feat_bins = pd.qcut(feat_vals, q=3, labels=["Low", "Medium", "High"], duplicates="drop")
+    # [Paper §3.1, Fig. 9] Risk grades via quartile buckets on model scores
+    risk_grades = _assign_risk_grades(model_probs)
+
+    # Use the fitted optbinning object to assign feature bins
+    optb = binning_results.get_optb(feature_name)
+    feat_vals = X_raw[feature_name].values.astype(float)
+    feat_bins = optb.transform(feat_vals, metric="bins")
 
     plot_df = pd.DataFrame({
         "risk_grade": risk_grades,
@@ -144,7 +144,9 @@ def _plot_residual_bar(
     })
 
     try:
-        pivot = plot_df.groupby(["risk_grade", "feature_bin"])["is_default"].mean().unstack()
+        pivot = plot_df.groupby(
+            ["risk_grade", "feature_bin"], observed=True,
+        )["is_default"].mean().unstack()
     except Exception:
         return
 
@@ -162,3 +164,21 @@ def _plot_residual_bar(
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     logger.info("Residual monitoring plot saved to %s", path)
+
+
+def _assign_risk_grades(probs: np.ndarray) -> pd.Categorical:
+    """Assign risk grades robustly, handling duplicate quantile boundaries.
+
+    Uses rank-based assignment when probabilities cluster too tightly for
+    pd.qcut to produce 4 unique bins.
+    """
+    labels = ["Very Low", "Low", "Average", "High"]
+    try:
+        return pd.qcut(probs, q=4, labels=labels, duplicates="drop")
+    except ValueError:
+        pass
+
+    # Fallback: rank-based quartile assignment (handles ties gracefully)
+    ranks = pd.Series(probs).rank(method="first")
+    quartiles = pd.cut(ranks, bins=4, labels=labels)
+    return quartiles

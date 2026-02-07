@@ -9,9 +9,15 @@ from __future__ import annotations
 
 import logging
 import time
+import warnings
 
-import numpy as np
-import pandas as pd
+# Suppress sklearn deprecation warning triggered inside optbinning
+warnings.filterwarnings(
+    "ignore",
+    message=".*force_all_finite.*renamed.*ensure_all_finite.*",
+    category=FutureWarning,
+)
+
 import statsmodels.api as sm
 from sklearn.metrics import roc_auc_score
 
@@ -74,6 +80,12 @@ def run_pipeline() -> None:
 
     y = merged["is_default"]
     X = merged.drop(columns=["is_default"])
+
+    # Drop ID columns — they leak identity information, not genuine features
+    id_cols = [c for c in X.columns if c.endswith("_id") or c == "customer_id"]
+    if id_cols:
+        logger.info("Dropping %d ID columns: %s", len(id_cols), id_cols)
+        X = X.drop(columns=id_cols)
 
     report.add_section("2. Feature Generation (DFS)", (
         f"- Features generated: {X.shape[1]}\n"

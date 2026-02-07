@@ -14,6 +14,9 @@ import warnings
 import featuretools as ft
 import numpy as np
 import pandas as pd
+from woodwork.logical_types import (
+    Boolean, Categorical, Datetime, Double, Integer,
+)
 
 from revolut_credit_risk import config
 from revolut_credit_risk.data.synthetic_data import SyntheticData
@@ -105,18 +108,30 @@ def _build_entity_set(data: SyntheticData) -> ft.EntitySet:
     """
     es = ft.EntitySet(id="revolut_credit_risk")
 
-    # Add dataframes
+    # Add dataframes with explicit logical types to avoid Woodwork
+    # "Could not infer format" warnings on date columns
     es = es.add_dataframe(
         dataframe_name="customers",
         dataframe=data.customers.copy(),
         index="customer_id",
         time_index="signup_date",
+        logical_types={
+            "signup_date": Datetime,
+            "income_band": Categorical,
+            "country": Categorical,
+            "employment_status": Categorical,
+        },
     )
     es = es.add_dataframe(
         dataframe_name="accounts",
         dataframe=data.accounts.copy(),
         index="account_id",
         time_index="open_date",
+        logical_types={
+            "open_date": Datetime,
+            "account_type": Categorical,
+            "currency": Categorical,
+        },
     )
 
     tx = data.transactions.copy()
@@ -125,6 +140,13 @@ def _build_entity_set(data: SyntheticData) -> ft.EntitySet:
         dataframe=tx,
         index="transaction_id",
         time_index="transaction_date",
+        logical_types={
+            "transaction_date": Datetime,
+            "amount": Double,
+            "category": Categorical,
+            "merchant_name": Categorical,
+            "transaction_state": Categorical,
+        },
     )
 
     apps = data.credit_applications.copy()
@@ -133,6 +155,12 @@ def _build_entity_set(data: SyntheticData) -> ft.EntitySet:
         dataframe=apps,
         index="application_id",
         time_index="application_date",
+        logical_types={
+            "application_date": Datetime,
+            "product_type": Categorical,
+            "requested_amount": Double,
+            "approved": Boolean,
+        },
     )
 
     # Add relationships

@@ -31,7 +31,7 @@ PREDICTION_HORIZON_MONTHS: int = 12  # [Paper §2.2.3, Fig. 3]
 # ---------------------------------------------------------------------------
 # Deep Feature Synthesis
 # ---------------------------------------------------------------------------
-DFS_DEPTH: int = 2  # [Paper §2.2.4] recursive depth
+DFS_DEPTH: int = 3  # [Paper §2.2.4] recursive depth; 3 needed to reach transactions
 DFS_MAX_FEATURES: int = 500  # [Assumption] cap for tractability
 
 # ---------------------------------------------------------------------------
@@ -54,10 +54,10 @@ LLM_MODEL: str = "claude-sonnet-4-5-20250929"  # [Assumption]
 # Feature selection
 # ---------------------------------------------------------------------------
 IV_THRESHOLD: float = 0.02  # [Paper §2.3.2] "e.g. 2%"
-MIV_THRESHOLD: float = 0.02  # [Paper §2.3.2] "e.g. 2%"
-CORRELATION_THRESHOLD: float = 0.6  # [Paper §2.3.2] upper end of 40-60%
+MIV_THRESHOLD: float = 0.01  # [Paper §2.3.2] "e.g. 2%"; lowered to 1% for more features
+CORRELATION_THRESHOLD: float = 0.80  # [Paper §2.3.2] "e.g. 40-60%"; raised to 80% for DFS features
 MAX_FEATURES: int = 20  # [Assumption]
-MIV_PATIENCE: int = 2  # [Assumption] patience=2 for AUC plateau
+MIV_PATIENCE: int = 3  # [Assumption] patience=3 for AUC plateau
 
 # ---------------------------------------------------------------------------
 # Scorecard
