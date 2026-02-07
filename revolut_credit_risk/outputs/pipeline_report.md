@@ -1,5 +1,5 @@
 # Credit Risk Model Development Report
-_Generated: 2026-02-07 11:31:15_
+_Generated: 2026-02-07 20:13:36_
 
 ## 1. Data Summary
 
@@ -195,7 +195,7 @@ Dep. Variable:             is_default   No. Observations:                 4800
 Model:                          Logit   Df Residuals:                     4796
 Method:                           MLE   Df Model:                            3
 Date:                Sat, 07 Feb 2026   Pseudo R-squ.:                 0.04530
-Time:                        11:35:10   Log-Likelihood:                -1237.4
+Time:                        20:17:35   Log-Likelihood:                -1237.4
 converged:                       True   LL-Null:                       -1296.2
 Covariance Type:            nonrobust   LLR p-value:                 2.760e-25
 =============================================================================================================================
@@ -236,8 +236,8 @@ woe_customers.COUNT(transactions WHERE category = Salary)     0.0461      0.254 
 | model                   |   gini_train |   gini_test |   gini_oot |
 |:------------------------|-------------:|------------:|-----------:|
 | WoE Logistic Regression |     0.31239  |    0.288104 |   0.311087 |
-| Gradient Boosted Trees  |     0.981949 |    0.279619 |   0.31783  |
-| Random Forest           |     0.93462  |    0.35151  |   0.366513 |
+| Gradient Boosted Trees  |     0.981295 |    0.277463 |   0.296374 |
+| Random Forest           |     0.931745 |    0.351057 |   0.37484  |
 
 ## 8. PD Calibration
 

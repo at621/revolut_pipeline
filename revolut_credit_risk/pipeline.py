@@ -28,7 +28,7 @@ from revolut_credit_risk.data.synthetic_data import (
     generate_synthetic_data, save_dataset, load_dataset,
 )
 from revolut_credit_risk.features.dfs_engine import run_dfs
-from revolut_credit_risk.features.binning import bin_features, transform_woe
+from revolut_credit_risk.features.binning import bin_features, transform_woe, plot_binning_tables
 from revolut_credit_risk.features.variable_config import get_variable_configs
 from revolut_credit_risk.selection.information_value import (
     collect_iv, filter_by_iv, bivariate_analysis,
@@ -206,6 +206,9 @@ def run_pipeline() -> None:
         "5. Final Model — statsmodels Summary",
         f"```\n{scorecard.summary_text}\n```",
     )
+
+    # Binning plots for selected features  [Paper §2.2.5, §2.2.6]
+    plot_binning_tables(binning_results, selected)
 
     # Scorecard points
     if scorecard.scorecard_points is not None and len(scorecard.scorecard_points) > 0:
