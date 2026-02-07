@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+from scipy.stats import chi2
 from sklearn.metrics import roc_auc_score
 
 from revolut_credit_risk import config
@@ -48,13 +49,14 @@ def run_miv_selection(
     iv_table: pd.DataFrame,
     binning_results: BinningResults,
     candidate_features: list[str],
+    X_raw_train: pd.DataFrame | None = None,
 ) -> MIVSelectionResult:
     """Run greedy forward MIV feature selection.
 
     [Paper §2.3.2] Algorithm:
     1. Start with highest-IV feature.
     2. Iteratively add feature with highest MIV (residual info not yet captured).
-    3. Stop when MIV < threshold or AUC plateaus.
+    3. Stop when MIV < threshold, chi-square test fails, or AUC plateaus.
 
     Parameters
     ----------
@@ -68,6 +70,9 @@ def run_miv_selection(
         Fitted binning objects.
     candidate_features : list[str]
         Features that passed the IV threshold filter.
+    X_raw_train : pd.DataFrame, optional
+        Raw (pre-WoE) training features, used for correct bin assignment
+        in MIV computation.  If None, falls back to WoE values (legacy).
 
     Returns
     -------
@@ -139,20 +144,36 @@ def run_miv_selection(
             if not corr_ok:
                 continue
 
-            # Compute MIV
-            miv = _compute_miv(
-                X_woe_train[woe_col].values,
+            # Compute MIV using raw values for bin assignment
+            # [PDtoolkit Ref] optb.transform(metric="bins") expects raw-scale values
+            if X_raw_train is not None and feat in X_raw_train.columns:
+                x_raw = X_raw_train[feat].values.astype(float)
+            else:
+                x_raw = X_woe_train[woe_col].values  # legacy fallback
+
+            miv, p_val = _compute_miv(
+                x_raw,
                 y_train.values,
                 pred_probs,
                 binning_results.get_optb(feat),
             )
+
+            # [PDtoolkit Ref] Require both MIV > threshold AND chi-square significance
+            if p_val >= config.MIV_CHI2_P_VALUE:
+                logger.debug(
+                    "Skipping '%s': chi-square p=%.4f >= %.2f",
+                    feat, p_val, config.MIV_CHI2_P_VALUE,
+                )
+                continue
 
             if miv > best_miv:
                 best_miv = miv
                 best_feat = feat
 
         if best_feat is None:
-            result.stopping_reason = "All remaining features correlated with selected"
+            result.stopping_reason = (
+                "No remaining features pass correlation + chi-square filters"
+            )
             break
 
         # [Paper §2.3.2] "MIV falls below a set threshold (e.g. 2%)"
@@ -238,73 +259,112 @@ def _fit_and_score(
 
 
 def _compute_miv(
-    x_woe: np.ndarray,
+    x_raw: np.ndarray,
     y: np.ndarray,
     pred_probs: np.ndarray,
     optb,
-) -> float:
+) -> tuple[float, float]:
     """Compute Marginal Information Value for a candidate feature.
 
     [Paper §2.3.2] MIV formula:
     MIV(f) = SUM over bins [ (P(bin|Bad) - P(bin|Good)) * (WoE_observed - WoE_expected) ]
 
     WoE_expected is computed using the current model's predicted probabilities.
-    """
-    # Get bin edges from the fitted optbinning object
-    try:
-        binning_table = optb.binning_table.build()
-    except Exception:
-        return 0.0
 
-    # Get bin assignments for each observation
+    [PDtoolkit Ref] Also computes a marginal chi-square (G-test) p-value
+    to validate that the observed vs expected distributions are statistically
+    significantly different.
+
+    Parameters
+    ----------
+    x_raw : np.ndarray
+        Raw (pre-WoE) feature values for correct bin assignment.
+    y : np.ndarray
+        Binary target.
+    pred_probs : np.ndarray
+        Current model's predicted probabilities.
+    optb : OptimalBinning
+        Fitted binning object.
+
+    Returns
+    -------
+    tuple[float, float]
+        (miv_value, chi_square_p_value)
+    """
+    # Get bin assignments using raw values (not WoE)
     try:
-        bins = optb.transform(x_woe, metric="bins")
+        bins = optb.transform(x_raw, metric="bins")
     except Exception:
-        return 0.0
+        return 0.0, 1.0
 
     unique_bins = np.unique(bins)
     total_bad = y.sum()
     total_good = len(y) - total_bad
 
     if total_bad == 0 or total_good == 0:
-        return 0.0
+        return 0.0, 1.0
+
+    total_expected_bad = pred_probs.sum()
+    total_expected_good = (1 - pred_probs).sum()
 
     miv = 0.0
+    g_test_sum = 0.0
+    n_valid_bins = 0
+
     for b in unique_bins:
         mask = bins == b
         if mask.sum() == 0:
             continue
 
-        # Observed distributions
-        n_bad_bin = y[mask].sum()
-        n_good_bin = mask.sum() - n_bad_bin
-        p_bin_bad = n_bad_bin / total_bad if total_bad > 0 else 0
-        p_bin_good = n_good_bin / total_good if total_good > 0 else 0
+        # Observed counts
+        n_bad_obs = y[mask].sum()
+        n_good_obs = mask.sum() - n_bad_obs
+        p_bin_bad = n_bad_obs / total_bad if total_bad > 0 else 0
+        p_bin_good = n_good_obs / total_good if total_good > 0 else 0
 
-        # WoE observed
+        # WoE observed: log(P(bin|Bad) / P(bin|Good))
         if p_bin_bad > 0 and p_bin_good > 0:
             woe_observed = np.log(p_bin_bad / p_bin_good)
         else:
             continue
 
-        # WoE expected (from current model predictions)
+        # Expected counts (from current model predictions)
         pred_in_bin = pred_probs[mask]
-        expected_bad = pred_in_bin.sum()
-        expected_good = (1 - pred_in_bin).sum()
-        total_expected_bad = pred_probs.sum()
-        total_expected_good = (1 - pred_probs).sum()
+        n_bad_exp = pred_in_bin.sum()
+        n_good_exp = (1 - pred_in_bin).sum()
 
-        p_bin_bad_exp = expected_bad / total_expected_bad if total_expected_bad > 0 else 0
-        p_bin_good_exp = expected_good / total_expected_good if total_expected_good > 0 else 0
+        p_bin_bad_exp = n_bad_exp / total_expected_bad if total_expected_bad > 0 else 0
+        p_bin_good_exp = n_good_exp / total_expected_good if total_expected_good > 0 else 0
 
         if p_bin_bad_exp > 0 and p_bin_good_exp > 0:
             woe_expected = np.log(p_bin_bad_exp / p_bin_good_exp)
         else:
             continue
 
+        # [Paper §2.3.2] MIV contribution
         miv += (p_bin_bad - p_bin_good) * (woe_observed - woe_expected)
 
-    return float(miv)
+        # [PDtoolkit Ref] G-test contribution: n_obs * log(n_obs / n_exp)
+        if n_good_exp > 0 and n_bad_exp > 0:
+            g_good = n_good_obs * np.log(n_good_obs / n_good_exp) if n_good_obs > 0 else 0.0
+            g_bad = n_bad_obs * np.log(n_bad_obs / n_bad_exp) if n_bad_obs > 0 else 0.0
+            g_test_sum += g_good + g_bad
+
+        n_valid_bins += 1
+
+    # [PDtoolkit Ref] Chi-square p-value with df = n_bins - 1
+    if n_valid_bins > 1:
+        g_stat = 2.0 * g_test_sum
+        p_val = 1.0 - chi2.cdf(g_stat, df=n_valid_bins - 1)
+    else:
+        p_val = 1.0
+
+    miv_val = float(miv)
+    if not np.isfinite(miv_val):
+        miv_val = 0.0
+        p_val = 1.0
+
+    return miv_val, p_val
 
 
 def _check_correlation(

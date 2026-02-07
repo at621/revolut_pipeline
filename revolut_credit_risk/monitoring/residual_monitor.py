@@ -79,18 +79,17 @@ def run_residual_monitoring(
     # Compute MIV for each candidate against current model
     rows = []
     for feat in candidates:
-        woe_col = f"woe_{feat}"
-        if woe_col not in X_woe.columns:
+        if feat not in X_raw.columns:
             continue
 
         optb = binning_results.get_optb(feat)
-        miv = _compute_miv(
-            X_woe[woe_col].values,
+        miv_val, p_val = _compute_miv(
+            X_raw[feat].values.astype(float),
             y_true,
             model_probs,
             optb,
         )
-        rows.append({"feature": feat, "miv": miv})
+        rows.append({"feature": feat, "miv": miv_val, "p_value": p_val})
 
     df = pd.DataFrame(rows).sort_values("miv", ascending=False).reset_index(drop=True)
     result.candidate_table = df

@@ -1,5 +1,5 @@
 # Credit Risk Model Development Report
-_Generated: 2026-02-07 20:13:36_
+_Generated: 2026-02-07 21:22:31_
 
 ## 1. Data Summary
 
@@ -180,10 +180,11 @@ _Generated: 2026-02-07 20:13:36_
 | Step | Feature Added | MIV | AUC (Train) | AUC (Test) |
 |---|---|---|---|---|
 | 1 | customers.STD(transactions.amount) | 0.3970 | 0.6425 | 0.6705 |
-| 2 | customers.SKEW(accounts.MIN(transactions.amount)) | 0.0240 | 0.6500 | 0.6435 |
-| 3 | customers.COUNT(transactions WHERE category = Salary) | 0.0152 | 0.6562 | 0.6441 |
+| 2 | customers.SUM(transactions.amount WHERE category = Travel) | 0.0862 | 0.6675 | 0.6505 |
+| 3 | customers.SUM(accounts.MAX(transactions.amount)) | 0.0694 | 0.6726 | 0.6542 |
+| 4 | customers.SUM(transactions.amount WHERE category = Entertainment) | 0.0738 | 0.6873 | 0.6512 |
 
-- Stopping reason: MIV (0.0000) below threshold (0.01)
+- Stopping reason: AUC plateau after step 4 (no improvement for 3 steps)
 
 
 ## 5. Final Model — statsmodels Summary
@@ -192,80 +193,87 @@ _Generated: 2026-02-07 20:13:36_
                            Logit Regression Results                           
 ==============================================================================
 Dep. Variable:             is_default   No. Observations:                 4800
-Model:                          Logit   Df Residuals:                     4796
-Method:                           MLE   Df Model:                            3
-Date:                Sat, 07 Feb 2026   Pseudo R-squ.:                 0.04530
-Time:                        20:17:35   Log-Likelihood:                -1237.4
+Model:                          Logit   Df Residuals:                     4795
+Method:                           MLE   Df Model:                            4
+Date:                Sat, 07 Feb 2026   Pseudo R-squ.:                 0.06476
+Time:                        21:26:32   Log-Likelihood:                -1212.2
 converged:                       True   LL-Null:                       -1296.2
-Covariance Type:            nonrobust   LLR p-value:                 2.760e-25
-=============================================================================================================================
-                                                                coef    std err          z      P>|z|      [0.025      0.975]
------------------------------------------------------------------------------------------------------------------------------
-const                                                        -2.4911      0.058    -43.200      0.000      -2.604      -2.378
-woe_customers.STD(transactions.amount)                       -0.9826      0.130     -7.531      0.000      -1.238      -0.727
-woe_customers.SKEW(accounts.MIN(transactions.amount))        -0.9157      0.299     -3.067      0.002      -1.501      -0.331
-woe_customers.COUNT(transactions WHERE category = Salary)     0.0461      0.254      0.182      0.856      -0.451       0.543
-=============================================================================================================================
+Covariance Type:            nonrobust   LLR p-value:                 2.996e-35
+=========================================================================================================================================
+                                                                            coef    std err          z      P>|z|      [0.025      0.975]
+-----------------------------------------------------------------------------------------------------------------------------------------
+const                                                                    -2.4897      0.058    -42.784      0.000      -2.604      -2.376
+woe_customers.STD(transactions.amount)                                   -0.6232      0.130     -4.809      0.000      -0.877      -0.369
+woe_customers.SUM(transactions.amount WHERE category = Travel)           -0.8593      0.169     -5.072      0.000      -1.191      -0.527
+woe_customers.SUM(accounts.MAX(transactions.amount))                     -0.7846      0.186     -4.229      0.000      -1.148      -0.421
+woe_customers.SUM(transactions.amount WHERE category = Entertainment)    -0.8353      0.173     -4.836      0.000      -1.174      -0.497
+=========================================================================================================================================
 ```
 
 ## 6. Scorecard Points
 
-| feature                                               | bin                |     woe |   points |
-|:------------------------------------------------------|:-------------------|--------:|---------:|
-| customers.STD(transactions.amount)                    | (-inf, 956.81)     | -0.4514 |    125.6 |
-| customers.STD(transactions.amount)                    | [956.81, 1171.79)  | -0.4308 |    126.2 |
-| customers.STD(transactions.amount)                    | [1171.79, 1397.73) | -0.1602 |    133.9 |
-| customers.STD(transactions.amount)                    | [1397.73, 1693.12) |  0.1802 |    143.5 |
-| customers.STD(transactions.amount)                    | [1693.12, 1863.21) |  0.3685 |    148.9 |
-| customers.STD(transactions.amount)                    | [1863.21, 2341.83) |  1.1248 |    170.3 |
-| customers.STD(transactions.amount)                    | [2341.83, inf)     |  3.0057 |    223.6 |
-| customers.SKEW(accounts.MIN(transactions.amount))     | (-inf, -1.00)      | -0.3216 |    129.9 |
-| customers.SKEW(accounts.MIN(transactions.amount))     | [-1.00, 0.70)      | -0.037  |    137.4 |
-| customers.SKEW(accounts.MIN(transactions.amount))     | [0.70, 1.52)       |  0.3946 |    148.8 |
-| customers.SKEW(accounts.MIN(transactions.amount))     | [1.52, inf)        |  0.7245 |    157.6 |
-| customers.COUNT(transactions WHERE category = Salary) | (-inf, 0.50)       | -0.1909 |    138.7 |
-| customers.COUNT(transactions WHERE category = Salary) | [0.50, 4.50)       | -0.0741 |    138.5 |
-| customers.COUNT(transactions WHERE category = Salary) | [4.50, 7.50)       | -0.0602 |    138.5 |
-| customers.COUNT(transactions WHERE category = Salary) | [7.50, 10.50)      |  0.0365 |    138.4 |
-| customers.COUNT(transactions WHERE category = Salary) | [10.50, 12.50)     |  0.152  |    138.2 |
-| customers.COUNT(transactions WHERE category = Salary) | [12.50, 17.50)     |  0.6834 |    137.5 |
-| customers.COUNT(transactions WHERE category = Salary) | [17.50, inf)       |  0.7407 |    137.4 |
+| feature                                                           | bin                 |     woe |   points |
+|:------------------------------------------------------------------|:--------------------|--------:|---------:|
+| customers.STD(transactions.amount)                                | (-inf, 956.81)      | -0.4514 |     95.7 |
+| customers.STD(transactions.amount)                                | [956.81, 1171.79)   | -0.4308 |     96.1 |
+| customers.STD(transactions.amount)                                | [1171.79, 1397.73)  | -0.1602 |    100.9 |
+| customers.STD(transactions.amount)                                | [1397.73, 1693.12)  |  0.1802 |    107.1 |
+| customers.STD(transactions.amount)                                | [1693.12, 1863.21)  |  0.3685 |    110.4 |
+| customers.STD(transactions.amount)                                | [1863.21, 2341.83)  |  1.1248 |    124   |
+| customers.STD(transactions.amount)                                | [2341.83, inf)      |  3.0057 |    157.9 |
+| customers.SUM(transactions.amount WHERE category = Travel)        | (-inf, -202.89)     | -0.7181 |     86   |
+| customers.SUM(transactions.amount WHERE category = Travel)        | [-202.89, -119.65)  | -0.1977 |     98.9 |
+| customers.SUM(transactions.amount WHERE category = Travel)        | [-119.65, -66.01)   | -0.0466 |    102.7 |
+| customers.SUM(transactions.amount WHERE category = Travel)        | [-66.01, -31.67)    |  0.0678 |    105.5 |
+| customers.SUM(transactions.amount WHERE category = Travel)        | [-31.67, 235.21)    |  0.1579 |    107.7 |
+| customers.SUM(transactions.amount WHERE category = Travel)        | [235.21, inf)       |  0.42   |    114.2 |
+| customers.SUM(accounts.MAX(transactions.amount))                  | (-inf, 4544.89)     | -0.3593 |     95.7 |
+| customers.SUM(accounts.MAX(transactions.amount))                  | [4544.89, 8519.19)  |  0.0415 |    104.8 |
+| customers.SUM(accounts.MAX(transactions.amount))                  | [8519.19, 14924.44) |  0.3669 |    112.1 |
+| customers.SUM(accounts.MAX(transactions.amount))                  | [14924.44, inf)     |  1.0704 |    128.1 |
+| customers.SUM(transactions.amount WHERE category = Entertainment) | (-inf, -358.97)     | -0.8175 |     84.1 |
+| customers.SUM(transactions.amount WHERE category = Entertainment) | [-358.97, -103.21)  | -0.2956 |     96.7 |
+| customers.SUM(transactions.amount WHERE category = Entertainment) | [-103.21, -57.35)   | -0.0321 |    103   |
+| customers.SUM(transactions.amount WHERE category = Entertainment) | [-57.35, -16.32)    |  0.0503 |    105   |
+| customers.SUM(transactions.amount WHERE category = Entertainment) | [-16.32, 53.62)     |  0.1705 |    107.9 |
+| customers.SUM(transactions.amount WHERE category = Entertainment) | [53.62, 198.25)     |  0.288  |    110.8 |
+| customers.SUM(transactions.amount WHERE category = Entertainment) | [198.25, inf)       |  0.3617 |    112.5 |
 
 ## 9. Benchmarking
 
 | model                   |   gini_train |   gini_test |   gini_oot |
 |:------------------------|-------------:|------------:|-----------:|
-| WoE Logistic Regression |     0.31239  |    0.288104 |   0.311087 |
-| Gradient Boosted Trees  |     0.981295 |    0.277463 |   0.296374 |
-| Random Forest           |     0.931745 |    0.351057 |   0.37484  |
+| WoE Logistic Regression |     0.37456  |    0.302417 |   0.363374 |
+| Gradient Boosted Trees  |     0.981295 |    0.279504 |   0.298949 |
+| Random Forest           |     0.931366 |    0.342171 |   0.371942 |
 
 ## 8. PD Calibration
 
 - Method: Isotonic Regression
-- Brier Score (before): 0.0807
-- Brier Score (after): 0.0806
+- Brier Score (before): 0.0802
+- Brier Score (after): 0.0807
 
 
 ## 7. Model Performance
 
 | metric      |     train |      test |       oot |
 |:------------|----------:|----------:|----------:|
-| AUC         | 0.656195  | 0.644052  | 0.655544  |
-| GINI        | 0.31239   | 0.288104  | 0.311087  |
-| KS          | 0.241061  | 0.235424  | 0.251411  |
-| Brier Score | 0.0691604 | 0.0806948 | 0.0878577 |
+| AUC         | 0.68728   | 0.651209  | 0.681687  |
+| GINI        | 0.37456   | 0.302417  | 0.363374  |
+| KS          | 0.277909  | 0.291743  | 0.295222  |
+| Brier Score | 0.0679503 | 0.0802458 | 0.0855366 |
 
 ## 10. Residual Monitoring
 
-| feature                                                           |        miv |
-|:------------------------------------------------------------------|-----------:|
-| customers.MEAN(accounts.COUNT(transactions))                      | 0.00390752 |
-| customers.SKEW(accounts.SUM(transactions.amount))                 | 0.00278917 |
-| customers.COUNT(transactions WHERE category = Entertainment)      | 0          |
-| customers.COUNT(transactions WHERE category = Rent)               | 0          |
-| customers.COUNT(transactions WHERE category = Travel)             | 0          |
-| customers.COUNT(transactions WHERE transaction_state = COMPLETED) | 0          |
-| customers.COUNT(accounts)                                         | 0          |
-| customers.MAX(accounts.COUNT(transactions))                       | 0          |
-| customers.MAX(accounts.MEAN(transactions.amount))                 | 0          |
-| customers.MAX(accounts.NUM_UNIQUE(transactions.category))         | 0          |
+| feature                                                        |       miv |    p_value |
+|:---------------------------------------------------------------|----------:|-----------:|
+| customers.MEAN(transactions.amount WHERE category = Groceries) | 0.0577251 | 0.00999302 |
+| customers.MEAN(transactions.amount WHERE category = Salary)    | 0.0451467 | 0.815309   |
+| customers.SUM(transactions.amount WHERE category = Groceries)  | 0.0417705 | 0.0529225  |
+| customers.MIN(accounts.SUM(transactions.amount))               | 0.0408836 | 0.558281   |
+| customers.SKEW(accounts.MIN(transactions.amount))              | 0.0364809 | 0.0117162  |
+| customers.MEAN(accounts.MAX(transactions.amount))              | 0.0357597 | 0.667013   |
+| customers.MEAN(accounts.SUM(transactions.amount))              | 0.0330182 | 0.540187   |
+| customers.MAX(accounts.STD(transactions.amount))               | 0.0328967 | 0.443825   |
+| customers.MIN(accounts.MAX(transactions.amount))               | 0.0304845 | 0.686626   |
+| customers.MIN(credit_applications.requested_amount)            | 0.0290314 | 0.00738762 |

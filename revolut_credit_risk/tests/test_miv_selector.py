@@ -45,14 +45,15 @@ def miv_data():
     iv_table = collect_iv(results)
     candidates = filter_by_iv(iv_table)
 
-    return X_woe_train, y_train, X_woe_test, y_test, iv_table, results, candidates
+    return X_train, X_woe_train, y_train, X_woe_test, y_test, iv_table, results, candidates
 
 
 def test_miv_selection_returns_result(miv_data):
-    X_woe_train, y_train, X_woe_test, y_test, iv_table, results, candidates = miv_data
+    X_train, X_woe_train, y_train, X_woe_test, y_test, iv_table, results, candidates = miv_data
     result = run_miv_selection(
         X_woe_train, y_train, X_woe_test, y_test,
         iv_table, results, candidates,
+        X_raw_train=X_train,
     )
 
     assert isinstance(result, MIVSelectionResult)
@@ -61,10 +62,11 @@ def test_miv_selection_returns_result(miv_data):
 
 
 def test_first_step_is_highest_iv(miv_data):
-    X_woe_train, y_train, X_woe_test, y_test, iv_table, results, candidates = miv_data
+    X_train, X_woe_train, y_train, X_woe_test, y_test, iv_table, results, candidates = miv_data
     result = run_miv_selection(
         X_woe_train, y_train, X_woe_test, y_test,
         iv_table, results, candidates,
+        X_raw_train=X_train,
     )
 
     # First step should have the highest-IV feature

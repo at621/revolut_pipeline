@@ -169,6 +169,7 @@ def run_pipeline() -> None:
         X_woe_test, y_test,
         iv_table, binning_results,
         candidate_features,
+        X_raw_train=X_train,
     )
 
     # MIV selection report

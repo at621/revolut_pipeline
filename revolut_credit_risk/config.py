@@ -58,6 +58,7 @@ MIV_THRESHOLD: float = 0.01  # [Paper §2.3.2] "e.g. 2%"; lowered to 1% for more
 CORRELATION_THRESHOLD: float = 0.80  # [Paper §2.3.2] "e.g. 40-60%"; raised to 80% for DFS features
 MAX_FEATURES: int = 20  # [Assumption]
 MIV_PATIENCE: int = 3  # [Assumption] patience=3 for AUC plateau
+MIV_CHI2_P_VALUE: float = 0.05  # [PDtoolkit Ref] Marginal chi-square significance level
 
 # ---------------------------------------------------------------------------
 # Scorecard
