@@ -201,10 +201,10 @@ def plot_binning_tables(
     binning_results: BinningResults,
     selected_features: list[str],
 ) -> None:
-    """Save optbinning event-rate plots for each selected feature.
+    """Save optbinning's native binning table plots for each selected feature.
 
-    [Paper §2.2.5, §2.2.6] Visualise bin boundaries, event (default) rate,
-    and WoE per bin for every variable in the final model.
+    [Paper §2.2.5, §2.2.6] Uses optbinning's built-in plot: stacked
+    event/non-event bar chart with event rate line on secondary axis.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -218,44 +218,9 @@ def plot_binning_tables(
             continue
         optb = binning_results.get_optb(feat)
 
-        # optbinning's built-in plot: event rate + WoE per bin
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-
-        table = optb.binning_table.build()
-        # Exclude Special/Missing/Totals rows (last 2-3 rows in optbinning)
-        exclude = {"Special", "Missing", "Totals"}
-        data_rows = table[~table["Bin"].astype(str).isin(exclude)].iloc[:-1]
-        bins = data_rows["Bin"].astype(str).values
-        event_rate = pd.to_numeric(data_rows["Event rate"], errors="coerce").fillna(0).values
-        woe = pd.to_numeric(data_rows["WoE"], errors="coerce").fillna(0).values
-        count = pd.to_numeric(data_rows["Count"], errors="coerce").fillna(0).values
-
-        x_pos = np.arange(len(bins))
-
-        # Top: event rate (default rate) with count overlay
-        bars = ax1.bar(x_pos, event_rate, color="#e74c3c", alpha=0.8, label="Default rate")
-        ax1.set_ylabel("Default Rate")
-        ax1.set_title(f"{feat}")
-        ax1.grid(True, alpha=0.3, axis="y")
-
-        # Annotate counts on bars
-        for i, (bar, cnt) in enumerate(zip(bars, count)):
-            ax1.text(
-                bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                f"n={int(cnt)}", ha="center", va="bottom", fontsize=8,
-            )
-
-        # Bottom: WoE per bin
-        colors = ["#2ecc71" if w >= 0 else "#3498db" for w in woe]
-        ax2.bar(x_pos, woe, color=colors, alpha=0.8)
-        ax2.set_ylabel("WoE")
-        ax2.set_xlabel("Bin")
-        ax2.axhline(y=0, color="black", linewidth=0.5)
-        ax2.set_xticks(x_pos)
-        ax2.set_xticklabels(bins, rotation=45, ha="right", fontsize=8)
-        ax2.grid(True, alpha=0.3, axis="y")
-
-        plt.tight_layout()
+        # Use optbinning's native binning_table.plot()
+        optb.binning_table.plot(metric="event_rate", show_bin_labels=False)
+        fig = plt.gcf()
 
         # Sanitise feature name for filename
         safe_name = feat.replace(".", "_").replace("(", "").replace(")", "")
