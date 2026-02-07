@@ -44,3 +44,9 @@ htmlcov/
 
 # Claude Code temp files
 .claude/
+
+# Data files (parquet datasets)
+revolut_credit_risk/data/datasets/
+
+# Pipeline outputs (generated files)
+revolut_credit_risk/outputs/
